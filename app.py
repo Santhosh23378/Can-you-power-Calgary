@@ -1237,7 +1237,10 @@ def city_svg(S):
 def render_city(S, height=560):
     doc = f"<!doctype html><html><head><meta charset='utf-8'><style>{SVG_CSS}</style></head><body>{city_svg(S)}</body></html>"
     try:
-        components.html(doc, height=height)
+        if hasattr(st, "iframe"):          # newer Streamlit (components.html is being retired)
+            st.iframe(doc, height=height)
+        else:                              # older Streamlit
+            components.html(doc, height=height)
     except Exception:
         st.markdown(city_svg(S), unsafe_allow_html=True)
 
