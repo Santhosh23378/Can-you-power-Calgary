@@ -116,10 +116,9 @@ EVENTS = {
 }
 
 SPEEDS = {
-    "🐢 Slow — 1 hour per tick": (1, 0.7),
-    "🚶 Normal — 3 hours per tick": (3, 0.55),
-    "🐇 Fast — 6 hours per tick": (6, 0.45),
-    "🚀 Very fast — 1 day per tick": (24, 0.5),
+    "🐢 Slow": (1, 3.0),      # 1 game hour every 3 real seconds (a day takes ~72 s)
+    "🚶 Normal": (1, 1.5),
+    "🐇 Fast": (1, 0.7),
 }
 
 SOURCES = [("nuclear", "Nuclear", "#a78bfa"), ("hydro", "Hydro", "#38bdf8"), ("wind", "Wind", "#34d399"),
@@ -962,17 +961,18 @@ def fx_front(S, r, B, dayf, night, evk):
         o.append(f'<text x="{xc}" y="{y1 - 6}" font-size="10.5" font-weight="800" fill="#fff" text-anchor="middle">⚠ −{ev["loss"]:.0f} MW</text>')
     # ---- flash when a brand-new event starts ----
     newest = max(S["events"], key=lambda e: e["start"]) if S["events"] else None
-    if newest and S["t"] - newest["start"] <= 3 and newest["key"] != "chinook":
+    if newest and S["t"] - newest["start"] <= 1 and newest["key"] != "chinook":
         o.append('<rect x="0" y="0" width="1000" height="470" fill="#fff" class="flash"/>')
     # ---- big plain-English banner for the newest event (+ small pills for any others) ----
     if newest:
         pl = EVENT_PLAIN[newest["key"]]
         short = pl["short"].format(loss=f'{newest["loss"]:.0f}')
         left = max(0, newest["end"] - S["t"])
-        o.append(f'<g class="slidein"><rect x="12" y="10" width="740" height="38" rx="10" fill="{pl["color"]}" stroke="#ffffff" stroke-opacity="0.5" stroke-width="1.5"/>'
+        cls = ' class="slidein"' if S["t"] - newest["start"] <= 1 else ""
+        o.append(f'<g{cls}><rect x="12" y="10" width="664" height="38" rx="10" fill="{pl["color"]}" stroke="#ffffff" stroke-opacity="0.5" stroke-width="1.5"/>'
                  f'<text x="26" y="35" font-size="14" font-weight="800" fill="#fff">{EVENTS[newest["key"]]["icon"]} {pl["title"]}</text>'
                  f'<text x="218" y="35" font-size="13" font-weight="600" fill="#fff" opacity="0.95">{short}</text>'
-                 f'<text x="738" y="35" font-size="12" font-weight="700" fill="#fff" text-anchor="end" opacity="0.9">{left}h left</text></g>')
+                 f'<text x="662" y="35" font-size="12" font-weight="700" fill="#fff" text-anchor="end" opacity="0.9">{left}h left</text></g>')
         others = [e for e in S["events"] if e is not newest]
         for i, e in enumerate(others):
             ep = EVENT_PLAIN[e["key"]]
@@ -1222,8 +1222,8 @@ def city_svg(S):
     # HUD: event effects + banner, weather & time, alerts
     p.append(fx_front(S, r, B, dayf, night, evk))
     wicon = "☁️" if cover > 0.7 else ("🌙" if night > 0.5 else "☀️")
-    p.append(f'<rect x="760" y="12" width="228" height="25" rx="12" fill="#000" opacity="0.5"/>'
-             f'<text x="874" y="29" font-size="12.5" fill="#fff" text-anchor="middle" font-weight="700">{wicon} {fmt_hour(r["hour"])} · {r["temp"]:.0f}°C · wind {r["wind_ms"]:.0f} m/s</text>')
+    p.append(f'<rect x="690" y="12" width="298" height="25" rx="12" fill="#000" opacity="0.5"/>'
+             f'<text x="839" y="29" font-size="12.5" fill="#fff" text-anchor="middle" font-weight="700">{wicon} Day {r["day"] + 1} · {fmt_hour(r["hour"])} · {r["temp"]:.0f}°C · wind {r["wind_ms"]:.0f} m/s</text>')
     if status == "BLACKOUT":
         p.append(f'<rect x="330" y="50" width="340" height="30" rx="8" fill="#7f1d1d" opacity="0.92" class="pulse"/>'
                  f'<text x="500" y="71" font-size="14" fill="#fff" text-anchor="middle" font-weight="800">⚠ ROLLING BLACKOUTS · {r["unserved"]:.0f} MW SHORT</text>')
@@ -1234,8 +1234,23 @@ def city_svg(S):
     return "".join(p)
 
 
+# Locks every looping animation to the wall clock, so when the picture refreshes
+# (once per game hour) clouds, turbines, rain, etc. carry on smoothly instead of restarting.
+SYNC_JS = """<script>
+(function(){
+  var now = Date.now();
+  try{ document.getAnimations().forEach(function(a){
+    try{ var t = a.effect.getComputedTiming();
+         if (t.iterations === Infinity && isFinite(t.duration) && t.duration > 0){ a.currentTime = now; } }catch(e){}
+  }); }catch(e){}
+  try{ var svg = document.querySelector('svg'); if (svg && svg.setCurrentTime){ svg.setCurrentTime((now % 600000) / 1000); } }catch(e){}
+})();
+</script>"""
+
+
 def render_city(S, height=560):
-    doc = f"<!doctype html><html><head><meta charset='utf-8'><style>{SVG_CSS}</style></head><body>{city_svg(S)}</body></html>"
+    doc = (f"<!doctype html><html><head><meta charset='utf-8'><style>html{{background:#0b1220}}{SVG_CSS}</style></head>"
+           f"<body>{city_svg(S)}{SYNC_JS}</body></html>")
     try:
         if hasattr(st, "iframe"):          # newer Streamlit (components.html is being retired)
             st.iframe(doc, height=height)
@@ -1372,10 +1387,10 @@ FRIENDLY = {"Stable": ("💡", "LIGHTS ON"), "Tight": ("⚠️", "GETTING TIGHT"
             "Critical": ("🔶", "DANGER"), "BLACKOUT": ("🔴", "BLACKOUT")}
 
 SIMPLE = {
-    "solar": ("Free power from the sun", "✅ Cheap and clean", "❌ Makes nothing at night", "+50 MW in daytime"),
-    "wind": ("Power from the wind", "✅ Clean and cheap to run", "❌ Stops when the wind stops", "+50 MW when windy"),
-    "battery": ("Saves extra power for later", "✅ Fixes the night-time problem", "❌ Expensive", "Holds about 4 hours of power"),
-    "nuclear": ("Strong, steady power all day and night", "✅ Always on, no CO₂", "❌ Costs a lot, slow to build", "+150 MW any time"),
+    "solar": ("Free power from the sun", "✅ Cheap and clean · ❌ Nothing at night", "+50 MW in daytime"),
+    "wind": ("Power from the wind", "✅ Clean · ❌ Stops when the wind stops", "+50 MW when windy"),
+    "battery": ("Saves extra power for later", "✅ Fixes the night problem · ❌ Costly", "Holds about 4 hours of power"),
+    "nuclear": ("Strong, steady power 24/7", "✅ Always on, no CO₂ · ❌ Costly and slow", "+150 MW any time"),
 }
 
 
@@ -1483,6 +1498,20 @@ def dr_button(kind, text):
     btn(lab, f"dr_{kind}", on_click=cb_dr, args=(kind,), disabled=dis or bool(S["over"]))
 
 
+MODEL_TEXT = """
+- **Demand:** a daily shape (morning ramp, evening peak) × population, plus **heating** below 15 °C (5.5 MW per °C) and **cooling** above 21 °C (8 MW per °C).
+- **Solar:** real sun geometry for 51° N (day length and sun angle by season) × random daily cloudiness × events.
+- **Wind:** a persistent random wind speed (windier in winter) through a turbine power curve (starts at 2.5 m/s, full power near 10 m/s, shuts off at 25 m/s).
+- **Hydro:** run-of-river, seasonal. **Nuclear:** 95% availability. **Gas:** dispatchable, weaker in extreme heat or cold.
+- **Dispatch order:** clean power first, then charge batteries with any surplus (waste the rest), then gas, batteries (per your strategy), imports, and finally blackouts.
+- **Batteries:** 94% efficient each way (88% round trip), limited by both power (MW) and energy (MWh).
+- **Blackouts:** the least critical districts are cut first (industry, homes, downtown, schools). The hospital has backup generators.
+- **Money:** revenue per MWh delivered. Costs for gas fuel, carbon (\\$80 per tonne), imports, upkeep and blackout penalties. Build costs are scaled down for gameplay.
+
+**Simplifications:** Calgary is one region with a simplified fleet. No transmission congestion, reactive power or unit-commitment detail.
+"""
+
+
 # =============================================================================
 # 9. TITLE SCREEN
 # =============================================================================
@@ -1520,10 +1549,7 @@ if S is None:
     splash()
     st.stop()
 sync_settings()
-r = S["last"]
 over = bool(S["over"])
-L = LEVELS[S["level"]]
-st_name, st_icon, st_col = grid_status(r)
 
 # ---------------------------- settings (hidden sidebar) ----------------------
 with st.sidebar:
@@ -1545,35 +1571,13 @@ with st.sidebar:
                     "**Spare power** = how much extra you can make above demand.\n\n**Frequency** = the grid's heartbeat (60 Hz). It drops when you are short.\n\n"
                     "**Wasted clean power** = wind/solar power nobody could use or store.")
 
-# ---------------------------- header + goal ----------------------------------
-h1, h2 = st.columns([2.2, 1.6])
-with h1:
-    st.markdown(H('<div class="hero-title">⚡ Can You Power Calgary?</div>'
-                  '<div class="hero-sub">Keep the power coming in <b>higher</b> than what the city needs.</div>'), unsafe_allow_html=True)
-with h2:
-    who = "Sandbox mode" if S["mode"] == "sandbox" else f'{L["badge"]} Level {S["level"]} · {L["title"]}'
-    st.markdown(H(f'<div class="panel" style="padding:10px 14px"><div class="muted">YOU ARE</div><div style="font-weight:800;font-size:1.05rem">{who}</div></div>'),
-                unsafe_allow_html=True)
-    if S["mode"] == "career":
-        for lab, cur, tgt, hi in goal_status(S)[0]:
-            frac = clamp(cur / tgt, 0, 1) if hi else (clamp(tgt / max(cur, 1), 0, 1) if cur > 0 else 0.0)
-            st.progress(frac, text=f"🎯 Goal: {lab}: {cur:.0f} / {'≥' if hi else '≤'} {tgt:.0f}")
+# ---------------------------- title + controls -------------------------------
+# (These sit OUTSIDE the live area, so pressing them restarts the game clock properly.)
+st.markdown(H('<div class="hero-title">⚡ Can You Power Calgary?</div>'
+              '<div class="hero-sub">Keep the power you can make <b>higher</b> than what the city needs.</div>'), unsafe_allow_html=True)
 
-# ---------------------------- coach + controls -------------------------------
-if S["over"]:
-    why = ("City council lost confidence in you after repeated blackouts." if S["over"] == "fired" else "The city budget ran out.")
-    st.error(f"🛑 **GAME OVER.** {why} You lasted {r['day'] + 1} days with {S['blackout_hours']} blackout hours.")
-if S["won"]:
-    st.success("🏆 **MISSION COMPLETE!** Calgary has a reliable, cleaner grid because of you.")
-    if not S["balloons"]:
-        S["balloons"] = True
-        st.balloons()
-if S["promo"]:
-    st.success(md_safe(S["promo"]))
-
-st.markdown(coach_html(S, r), unsafe_allow_html=True)
-
-ctl = st.columns([1.5, 1.1, 1.2, 1])
+speed_names = list(SPEEDS)
+ctl = st.columns([1.5, 1.3, 1.1, 1])
 with ctl[0]:
     if S["running"]:
         run_label = "⏸ PAUSE"
@@ -1581,210 +1585,246 @@ with ctl[0]:
         run_label = "▶ START" if S["t"] <= 1 else "▶ CONTINUE"
     btn(run_label, "run_btn", on_click=cb_toggle_run, type="primary", disabled=over)
 with ctl[1]:
-    btn("⏭ Skip 1 day", "s24", on_click=cb_step, args=(24,), disabled=over)
+    st.selectbox("Speed", speed_names, index=0, key="speed_choice", label_visibility="collapsed")
 with ctl[2]:
-    st.selectbox("Speed", list(SPEEDS), index=1, key="speed_choice", label_visibility="collapsed", format_func=lambda k: k.split(" — ")[0])
+    btn("⏭ Skip 1 day", "s24", on_click=cb_step, args=(24,), disabled=over)
 with ctl[3]:
     btn("↺ New game", "restart_btn", on_click=cb_restart)
 
-# ---------------------------- the numbers that matter ------------------------
-cols = st.columns([1.15, 1, 1, 1, 1])
-cols[0].markdown(card("🕒 Time", fmt_hour(r["hour"]), f'Day {r["day"] + 1} · {r["date"]} · {r["temp"]:.0f}°C'), unsafe_allow_html=True)
-cols[1].markdown(card("⚡ City needs", f'{r["demand"]:,.0f} MW', "power the city is using"), unsafe_allow_html=True)
-cols[2].markdown(card("🏭 You can make", f'{r["available"]:,.0f} MW', "power ready to use", st_col, st_col if st_name != "Stable" else None), unsafe_allow_html=True)
-cols[3].markdown(card("💰 Money", f'&#36;{S["cash"]:,.0f}M', f'{"+" if S["month_net"] >= 0 else "−"}&#36;{abs(S["month_net"]):.1f}M this month',
-                      "#34d399" if S["cash"] > 40 else "#fbbf24" if S["cash"] > 0 else "#f87171"), unsafe_allow_html=True)
-cols[4].markdown(card("😊 Happiness", f'{S["satisfaction"]:.0f}%', "of Calgarians", score_color(S["satisfaction"])), unsafe_allow_html=True)
-st.markdown(meter_html(r), unsafe_allow_html=True)
-st.markdown(status_html(r), unsafe_allow_html=True)
-st.caption("MW = megawatts, a way to measure power. 1 MW is enough for about 1,000 homes.")
+speed_at_def = st.session_state.get("speed_choice", speed_names[0])
+hrs, secs = SPEEDS.get(speed_at_def, SPEEDS[speed_names[0]])
+st.caption(f"⏱ In the game, 1 hour takes {secs:g} seconds of real time, so one full day takes about {24 * secs:.0f} seconds. Use the speed menu to change it.")
+run_every = secs if (S["running"] and not S["over"]) else None
 
-if S["events"]:
-    st.markdown(event_cards_html(S), unsafe_allow_html=True)
 
-# ---------------------------- the city ---------------------------------------
-render_city(S)
-st.markdown(sources_html(r), unsafe_allow_html=True)
+# ---------------------------- the live game area -----------------------------
+# Only this area refreshes while the clock runs, so the rest of the page never flickers.
+@st.fragment(run_every=run_every)
+def live():
+    S = G()
+    if S is None:
+        st.rerun()
+        return
+    sync_settings()
+    if run_every is not None:
+        if st.session_state.get("speed_choice", speed_names[0]) != speed_at_def:
+            st.rerun()                              # speed changed: restart the timer at the new pace
+        if S["running"] and not S["over"]:
+            advance(S, hrs, stop_on_alert=S["autopause"])
+        if not S["running"] or S["over"]:
+            st.rerun()                              # paused / event / game over: stop the timer
+    r = S["last"]
+    over = bool(S["over"])
+    L = LEVELS[S["level"]]
+    st_name, st_icon, st_col = grid_status(r)
 
-# ---------------------------- your move --------------------------------------
-st.markdown("## 🛠️ Your Move")
-st.markdown("**Build power plants.** They take days to finish, so plan ahead. The weather won't wait!")
-build_cols = st.columns(4)
-for col, kind in zip(build_cols, ["solar", "wind", "battery", "nuclear"]):
-    spec = BUILDS[kind]
-    tagline, pro, con, size = SIMPLE[kind]
-    locked = S["mode"] == "career" and S["level"] < spec["unlock"]
-    in_q = sum(1 for q in S["queue"] if q["kind"] == kind)
-    with col:
+    # ---- who you are + goal ----
+    g1, g2 = st.columns([1.1, 2])
+    with g1:
+        who = "Sandbox mode" if S["mode"] == "sandbox" else f'{L["badge"]} Level {S["level"]} · {L["title"]}'
+        st.markdown(H(f'<div class="panel" style="padding:8px 14px"><div class="muted">YOU ARE</div><div style="font-weight:800">{who}</div></div>'), unsafe_allow_html=True)
+    with g2:
+        if S["mode"] == "career":
+            for lab, cur, tgt, hi in goal_status(S)[0]:
+                frac = clamp(cur / tgt, 0, 1) if hi else (clamp(tgt / max(cur, 1), 0, 1) if cur > 0 else 0.0)
+                st.progress(frac, text=f"🎯 Goal: {lab}: {cur:.0f} / {'≥' if hi else '≤'} {tgt:.0f}")
+
+    # ---- banners ----
+    if S["over"]:
+        why = ("City council lost confidence in you after repeated blackouts." if S["over"] == "fired" else "The city budget ran out.")
+        st.error(f"🛑 **GAME OVER.** {why} You lasted {r['day'] + 1} days with {S['blackout_hours']} blackout hours.")
+    if S["won"]:
+        st.success("🏆 **MISSION COMPLETE!** Calgary has a reliable, cleaner grid because of you.")
+        if not S["balloons"]:
+            S["balloons"] = True
+            st.balloons()
+    if S["promo"]:
+        st.success(md_safe(S["promo"]))
+
+    # ---- what to do now ----
+    st.markdown(coach_html(S, r), unsafe_allow_html=True)
+
+    # ---- the four numbers that matter ----
+    cols = st.columns(4)
+    cols[0].markdown(card("⚡ City needs", f'{r["demand"]:,.0f} MW', "power the city is using"), unsafe_allow_html=True)
+    cols[1].markdown(card("🏭 You can make", f'{r["available"]:,.0f} MW', "power ready to use", st_col, st_col if st_name != "Stable" else None), unsafe_allow_html=True)
+    cols[2].markdown(card("💰 Money", f'&#36;{S["cash"]:,.0f}M', f'{"+" if S["month_net"] >= 0 else "−"}&#36;{abs(S["month_net"]):.1f}M this month',
+                          "#34d399" if S["cash"] > 40 else "#fbbf24" if S["cash"] > 0 else "#f87171"), unsafe_allow_html=True)
+    cols[3].markdown(card("😊 Happiness", f'{S["satisfaction"]:.0f}%', "of Calgarians", score_color(S["satisfaction"])), unsafe_allow_html=True)
+    st.markdown(meter_html(r), unsafe_allow_html=True)
+    st.markdown(status_html(r), unsafe_allow_html=True)
+
+    if S["events"]:
+        st.markdown(event_cards_html(S), unsafe_allow_html=True)
+
+    # ---- the city ----
+    render_city(S)
+    st.markdown(sources_html(r), unsafe_allow_html=True)
+    st.caption("MW = megawatts, a way to measure power. 1 MW is enough for about 1,000 homes.")
+
+    # ---- your move ----
+    st.markdown("## 🛠️ Your Move")
+    st.markdown("**Build power plants.** They take days to finish, so plan ahead!")
+    build_cols = st.columns(4)
+    for col, kind in zip(build_cols, ["solar", "wind", "battery", "nuclear"]):
+        spec = BUILDS[kind]
+        tagline, goodbad, size = SIMPLE[kind]
+        locked = S["mode"] == "career" and S["level"] < spec["unlock"]
+        in_q = sum(1 for q in S["queue"] if q["kind"] == kind)
+        with col:
+            with st.container(border=True):
+                st.markdown(f"#### {spec['icon']} {spec['label']}")
+                st.markdown(f"**{tagline}**  \n{goodbad}")
+                st.caption(f"{size} · takes {spec['days']} days" + (f" · 🚧 {in_q} being built" if in_q else ""))
+                if locked:
+                    btn("🔒 Unlocks at Level 2", f"b_{kind}", disabled=True)
+                else:
+                    btn(f"Build · ${spec['cost']}M", f"b_{kind}", on_click=cb_build, args=(kind,), disabled=S["cash"] < spec["cost"] or over)
+
+    st.markdown("**Quick fixes.** These work right away.")
+    q = st.columns(3)
+    with q[0]:
         with st.container(border=True):
-            st.markdown(f"#### {spec['icon']} {spec['label']}")
-            st.markdown(f"**{tagline}**")
-            st.markdown(f"{pro}  \n{con}")
-            st.caption(f"{size} · takes {spec['days']} days")
-            if in_q:
-                st.markdown(f"🚧 {in_q} being built")
-            if locked:
-                btn("🔒 Unlocks at Level 2", f"b_{kind}", disabled=True)
+            st.markdown("#### 🔌 Buy power")
+            st.slider("From neighbours (MW)", 0, 300, key="import_slider")
+            eff = min(S["import_limit"], S["import_max"])
+            st.caption(f"Costs extra money. You can buy up to {eff} MW right now.")
+    with q[1]:
+        with st.container(border=True):
+            st.markdown("#### 📣 Ask people to save power")
+            dr_button("appeal", "📣 Make an appeal")
+            st.caption("City needs about 3% less for 6 hours.")
+    with q[2]:
+        with st.container(border=True):
+            st.markdown("#### 🏭 Pay factories to cut back")
+            dr_button("dr", "🏭 Cut back")
+            st.caption("City needs about 8% less for 4 hours.")
+
+    with st.expander("More options (for experts)"):
+        x1, x2 = st.columns(2)
+        with x1:
+            st.markdown("**🔋 How should the battery be used?**")
+            st.radio("Battery use", ["Peak shaving: save charge for the crunch", "Use ASAP: maximise clean energy"], key="batt_strategy", label_visibility="collapsed")
+            st.toggle("Charge batteries from the gas grid when there is spare capacity", key="grid_charge",
+                      help="Lets storage fill up overnight with no solar or wind surplus, but burns gas.")
+            st.caption(f"Battery: {S['cap']['battery_mw']:.0f} MW / {S['cap']['battery_mwh']:.0f} MWh · {S['soc']:.0f} MWh stored")
+        with x2:
+            st.markdown("**🔌 Bigger power line to neighbours**")
+            pend = any(item["kind"] == "intertie" for item in S["queue"])
+            btn(f"Upgrade the line (+50 MW) · ${BUILDS['intertie']['cost']}M" + (" · 🚧 building" if pend else ""), "b_intertie",
+                on_click=cb_build, args=("intertie",), disabled=S["cash"] < BUILDS["intertie"]["cost"] or pend or over)
+            st.caption(f"The line can carry up to {S['import_max']} MW.")
+
+    # ---- graphs (hidden until asked for, to keep the screen simple) ----
+    st.toggle("📈 Show graphs and analyst numbers", key="show_graphs")
+    if st.session_state.get("show_graphs"):
+        tabs = st.tabs(["📈 Today's grid", "🔋 Why storage matters", "🔬 Analyst view"])
+
+        with tabs[0]:
+            st.radio("Time window", ["Last 24 hours", "Last 3 days", "Last 7 days"], index=0, horizontal=True, key="win_live")
+            df = hist_df(S, window_hours("win_live"))
+            show_chart(chart_demand_supply(df))
+            st.caption("When the white line goes above the blue dashed line, the city needs more power than you can make. That's a blackout (red).")
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                show_chart(chart_mix(df))
+            with c2:
+                show_chart(chart_donut(df))
+
+        with tabs[1]:
+            st.markdown("### 🔋 Why storage is the hard part")
+            st.markdown("Solar and wind make power at the **wrong times**: lots at noon, none at night, almost none when it's calm. "
+                        "**Batteries save extra power for later.**")
+            df = hist_df(S, 168)
+            wasted, shifted = float(df["curtailed"].sum()), float(df["battery"].sum())
+            low_hours = df[df["variable"] < 0.1 * df["demand"]]
+            gas_low = float(low_hours["gas"].sum())
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Clean power wasted (7 days)", f"{wasted:,.0f} MWh", help="Wind and solar power that nobody could use or store.")
+            m2.metric("Gas burned when sun and wind were low", f"{gas_low:,.0f} MWh")
+            m3.metric("Power moved by batteries", f"{shifted:,.0f} MWh")
+            if wasted > 20 and gas_low > 20:
+                st.success(f"**That's the storage gap.** You threw away **{wasted:,.0f} MWh** of clean power, then burned **{gas_low:,.0f} MWh** of gas "
+                           f"(about **{gas_low * GAS_CO2:,.0f} tonnes of CO₂**) when the sun and wind weren't working. A battery bridges those two moments.")
+            elif wasted > 20:
+                st.info(f"You wasted **{wasted:,.0f} MWh** of clean power this week. More batteries would let you use it later.")
             else:
-                btn(f"Build · ${spec['cost']}M", f"b_{kind}", on_click=cb_build, args=(kind,), disabled=S["cash"] < spec["cost"] or over)
+                st.info("Build more solar and wind, then watch for times when you make more clean power than the city needs. That's wasted power waiting for a battery.")
+            df3 = hist_df(S, 72)
+            dl = df3.melt(id_vars=["time"], value_vars=["demand", "variable"], var_name="k", value_name="MW")
+            dl["Series"] = dl["k"].map(dict(demand="City needs", variable="Wind + solar making"))
+            ch = alt.Chart(dl).mark_line(strokeWidth=2.2).encode(
+                x=alt.X("time:T", axis=TAX), y=alt.Y("MW:Q"),
+                color=alt.Color("Series:N", scale=alt.Scale(domain=["City needs", "Wind + solar making"], range=["#f8fafc", "#34d399"]), legend=alt.Legend(title=None)))
+            show_chart(style(ch.properties(height=270, title="The power the city needs doesn't match the power wind and solar make")))
+            st.markdown("> **The hard problem isn't finding energy. It's storing and delivering it when people need it.**")
 
-st.markdown("**Quick fixes.** These work right away.")
-q = st.columns(3)
-with q[0]:
-    with st.container(border=True):
-        st.markdown("#### 🔌 Buy power from neighbours")
-        st.slider("Most power to buy (MW)", 0, 300, key="import_slider")
-        eff = min(S["import_limit"], S["import_max"])
-        st.caption(f"Costs extra money, and it is usually made from gas. Right now you can buy up to {eff} MW. It won't work if the power line is down.")
-with q[1]:
-    with st.container(border=True):
-        st.markdown("#### 📣 Ask everyone to save power")
-        dr_button("appeal", "📣 Make an appeal")
-        st.caption("Lowers what the city needs by about 3% for 6 hours.")
-with q[2]:
-    with st.container(border=True):
-        st.markdown("#### 🏭 Pay factories to cut back")
-        dr_button("dr", "🏭 Cut back")
-        st.caption("Lowers what the city needs by about 8% for 4 hours. Some people get annoyed.")
+        with tabs[2]:
+            st.caption("The real numbers a grid analyst watches.")
+            k = st.columns(5)
+            k[0].markdown(card("🛡️ Grid stability", f'{r["stability"]:.0f}/100', "100 = rock solid", score_color(r["stability"])), unsafe_allow_html=True)
+            k[1].markdown(card("🌍 Emissions score", f'{r["em_score"]:.0f}/100', f'{r["ci"]:.0f} g CO₂ per kWh', score_color(r["em_score"])), unsafe_allow_html=True)
+            k[2].markdown(card("〰️ Frequency", f'{r["freq"]:.2f} Hz', "should stay at 60", "#f87171" if r["freq"] < 59.9 else "#e2e8f0"), unsafe_allow_html=True)
+            k[3].markdown(card("🧮 Reserve margin", f'{r["reserve"] * 100:+.0f}%', "spare power vs demand"), unsafe_allow_html=True)
+            k[4].markdown(card("💵 Pool price", "&#36;999 cap" if r["price"] >= 999 else f'&#36;{r["price"]:,.0f}/MWh', "wholesale power price"), unsafe_allow_html=True)
+            st.write("")
+            an1, an2 = st.columns([1, 1.6])
+            with an1:
+                st.markdown(control_room_html(S), unsafe_allow_html=True)
+            with an2:
+                st.radio("Time window", ["Last 24 hours", "Last 3 days", "Last 7 days"], index=1, horizontal=True, key="win_em")
+                dfa = hist_df(S, window_hours("win_em")).copy()
+                dfa["ci_roll"] = dfa["ci"].rolling(6, min_periods=1).mean()
+                for c in ("cost_fuel", "cost_imp", "cost_om", "cost_pen", "revenue"):
+                    dfa[c + "_k"] = dfa[c] / 1000.0
+                base = alt.Chart(dfa).mark_area(color="#94a3b8", opacity=0.25, line={"color": "#fb923c"}).encode(
+                    x=alt.X("time:T", axis=TAX), y=alt.Y("ci_roll:Q", title="g CO₂ per kWh"),
+                    tooltip=[alt.Tooltip("time:T", format="%b %d, %H:00"), alt.Tooltip("ci_roll:Q", format=".0f")])
+                rule = alt.Chart(pd.DataFrame({"y": [250]})).mark_rule(color="#34d399", strokeDash=[5, 4]).encode(y="y:Q")
+                show_chart(style((base + rule).properties(height=250, title="Emissions over time (green line = Level 3 target)")))
+                st.caption(f"Total CO₂ so far: **{S['co2_total']:,.0f} tonnes**.")
+                cost_long = dfa.melt(id_vars=["time"], value_vars=["cost_fuel_k", "cost_imp_k", "cost_om_k", "cost_pen_k"], var_name="k", value_name="kh")
+                nm = dict(cost_fuel_k="Gas fuel + carbon", cost_imp_k="Imported power", cost_om_k="Plant upkeep", cost_pen_k="Blackout penalties")
+                cost_long["Cost"] = cost_long["k"].map(nm)
+                area = alt.Chart(cost_long).mark_area(opacity=0.85).encode(
+                    x=alt.X("time:T", axis=TAX), y=alt.Y("kh:Q", stack="zero", title="Thousand $ per hour"),
+                    color=alt.Color("Cost:N", scale=alt.Scale(domain=list(nm.values()), range=["#94a3b8", "#fb923c", "#38bdf8", "#ef4444"]), legend=alt.Legend(title=None)))
+                rev = alt.Chart(dfa).mark_line(color="#34d399", strokeWidth=2).encode(x="time:T", y="revenue_k:Q")
+                show_chart(style((area + rev).properties(height=250, title="Cost over time (green line = revenue)")))
+            cap = S["cap"]
+            fleet = pd.DataFrame([
+                dict(Source="🔥 Natural gas", Capacity=f"{cap['gas']:.0f} MW", Now=f"{r['gas']:.0f} MW", Note="Can be turned up and down, but emits CO₂"),
+                dict(Source="💧 Hydro (Bow River)", Capacity=f"{cap['hydro']:.0f} MW", Now=f"{r['hydro']:.0f} MW", Note="Strongest in spring and summer"),
+                dict(Source="🌬️ Wind", Capacity=f"{cap['wind']:.0f} MW", Now=f"{r['wind']:.0f} MW", Note="Follows the wind, not demand"),
+                dict(Source="☀️ Solar", Capacity=f"{cap['solar']:.0f} MW", Now=f"{r['solar']:.0f} MW", Note="Daylight only; weak in winter"),
+                dict(Source="⚛️ Nuclear", Capacity=f"{cap['nuclear']:.0f} MW", Now=f"{r['nuclear']:.0f} MW", Note="Always on (95%), weather-proof"),
+                dict(Source="🔋 Battery", Capacity=f"{cap['battery_mw']:.0f} MW / {cap['battery_mwh']:.0f} MWh", Now=f"{r['battery'] - r['charge']:+.0f} MW", Note="+ discharging, − charging"),
+                dict(Source="🔌 Imports", Capacity=f"{S['import_max']} MW line", Now=f"{r['imports']:.0f} MW", Note="Expensive; fails in a transmission outage"),
+            ])
+            try:
+                st.dataframe(fleet, hide_index=True, width="stretch")
+            except TypeError:
+                st.dataframe(fleet, hide_index=True, use_container_width=True)
+            st.markdown("**🚧 Under construction**")
+            if not S["queue"]:
+                st.caption("Nothing is being built right now.")
+            for item in S["queue"]:
+                spec = BUILDS[item["kind"]]
+                total = max(1, item["eta"] - item["start"])
+                done = clamp((S["t"] - item["start"]) / total, 0, 1)
+                left = max(0, item["eta"] - S["t"])
+                st.progress(done, text=f"{spec['icon']} {spec['label']}: {left // 24}d {left % 24}h to go")
+            g1, g2, g3, g4 = st.columns(4)
+            g1.metric("Days survived", r["day"] + 1)
+            g2.metric("Blackout events", S["blackouts"])
+            g3.metric("Blackout hours", S["blackout_hours"])
+            g4.metric("No-blackout streak", f"{S['streak']} days")
+            with st.expander("📰 Event log"):
+                for n in reversed(S["news"][-40:]):
+                    icon = {"bad": "🔴", "good": "🟢"}.get(n["kind"], "🔹")
+                    st.markdown(f"{icon} `{n['label']}` — {md_safe(n['text'])}")
+            with st.expander("🧪 How the model works"):
+                st.markdown(MODEL_TEXT)
 
-with st.expander("More options (for experts)"):
-    x1, x2 = st.columns(2)
-    with x1:
-        st.markdown("**🔋 How should the battery be used?**")
-        st.radio("Battery use", ["Peak shaving: save charge for the crunch", "Use ASAP: maximise clean energy"], key="batt_strategy", label_visibility="collapsed")
-        st.toggle("Charge batteries from the gas grid when there is spare capacity", key="grid_charge",
-                  help="Lets storage fill up overnight with no solar or wind surplus, but burns gas.")
-        st.caption(f"Battery: {S['cap']['battery_mw']:.0f} MW / {S['cap']['battery_mwh']:.0f} MWh · {S['soc']:.0f} MWh stored")
-    with x2:
-        st.markdown("**🔌 Bigger power line to neighbours**")
-        pend = any(item["kind"] == "intertie" for item in S["queue"])
-        btn(f"Upgrade the line (+50 MW) · ${BUILDS['intertie']['cost']}M" + (" · 🚧 building" if pend else ""), "b_intertie",
-            on_click=cb_build, args=("intertie",), disabled=S["cash"] < BUILDS["intertie"]["cost"] or pend or over)
-        st.caption(f"The line can carry up to {S['import_max']} MW.")
 
-# ---------------------------- charts -----------------------------------------
-tabs = st.tabs(["📈 Today's grid", "🔋 Why storage matters", "🔬 Analyst view"])
-
-with tabs[0]:
-    st.radio("Time window", ["Last 24 hours", "Last 3 days", "Last 7 days"], index=0, horizontal=True, key="win_live")
-    df = hist_df(S, window_hours("win_live"))
-    show_chart(chart_demand_supply(df))
-    st.caption("When the white line goes above the blue dashed line, the city needs more power than you can make. That's a blackout (red).")
-    c1, c2 = st.columns([2, 1])
-    with c1:
-        show_chart(chart_mix(df))
-    with c2:
-        show_chart(chart_donut(df))
-
-with tabs[1]:
-    st.markdown("### 🔋 Why storage is the hard part")
-    st.markdown("Solar and wind make power at the **wrong times**: lots at noon, none at night, almost none when it's calm. "
-                "**Batteries save extra power for later.**")
-    df = hist_df(S, 168)
-    wasted, shifted = float(df["curtailed"].sum()), float(df["battery"].sum())
-    low_hours = df[df["variable"] < 0.1 * df["demand"]]
-    gas_low = float(low_hours["gas"].sum())
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Clean power wasted (7 days)", f"{wasted:,.0f} MWh", help="Wind and solar power that nobody could use or store.")
-    m2.metric("Gas burned when sun and wind were low", f"{gas_low:,.0f} MWh")
-    m3.metric("Power moved by batteries", f"{shifted:,.0f} MWh")
-    if wasted > 20 and gas_low > 20:
-        st.success(f"**That's the storage gap.** You threw away **{wasted:,.0f} MWh** of clean power, then burned **{gas_low:,.0f} MWh** of gas "
-                   f"(about **{gas_low * GAS_CO2:,.0f} tonnes of CO₂**) when the sun and wind weren't working. A battery bridges those two moments.")
-    elif wasted > 20:
-        st.info(f"You wasted **{wasted:,.0f} MWh** of clean power this week. More batteries would let you use it later.")
-    else:
-        st.info("Build more solar and wind, then watch for times when you make more clean power than the city needs. That's wasted power waiting for a battery.")
-    df3 = hist_df(S, 72)
-    dl = df3.melt(id_vars=["time"], value_vars=["demand", "variable"], var_name="k", value_name="MW")
-    dl["Series"] = dl["k"].map(dict(demand="City needs", variable="Wind + solar making"))
-    ch = alt.Chart(dl).mark_line(strokeWidth=2.2).encode(
-        x=alt.X("time:T", axis=TAX), y=alt.Y("MW:Q"),
-        color=alt.Color("Series:N", scale=alt.Scale(domain=["City needs", "Wind + solar making"], range=["#f8fafc", "#34d399"]), legend=alt.Legend(title=None)))
-    show_chart(style(ch.properties(height=270, title="The power the city needs doesn't match the power wind and solar make")))
-    st.markdown("> **The hard problem isn't finding energy. It's storing and delivering it when people need it.**")
-
-with tabs[2]:
-    st.caption("The real numbers a grid analyst watches.")
-    k = st.columns(5)
-    k[0].markdown(card("🛡️ Grid stability", f'{r["stability"]:.0f}/100', "100 = rock solid", score_color(r["stability"])), unsafe_allow_html=True)
-    k[1].markdown(card("🌍 Emissions score", f'{r["em_score"]:.0f}/100', f'{r["ci"]:.0f} g CO₂ per kWh', score_color(r["em_score"])), unsafe_allow_html=True)
-    k[2].markdown(card("〰️ Frequency", f'{r["freq"]:.2f} Hz', "should stay at 60", "#f87171" if r["freq"] < 59.9 else "#e2e8f0"), unsafe_allow_html=True)
-    k[3].markdown(card("🧮 Reserve margin", f'{r["reserve"] * 100:+.0f}%', "spare power vs demand"), unsafe_allow_html=True)
-    k[4].markdown(card("💵 Pool price", "&#36;999 cap" if r["price"] >= 999 else f'&#36;{r["price"]:,.0f}/MWh', "wholesale power price"), unsafe_allow_html=True)
-    st.write("")
-    an1, an2 = st.columns([1, 1.6])
-    with an1:
-        st.markdown(control_room_html(S), unsafe_allow_html=True)
-    with an2:
-        st.radio("Time window", ["Last 24 hours", "Last 3 days", "Last 7 days"], index=1, horizontal=True, key="win_em")
-        dfa = hist_df(S, window_hours("win_em")).copy()
-        dfa["ci_roll"] = dfa["ci"].rolling(6, min_periods=1).mean()
-        for c in ("cost_fuel", "cost_imp", "cost_om", "cost_pen", "revenue"):
-            dfa[c + "_k"] = dfa[c] / 1000.0
-        base = alt.Chart(dfa).mark_area(color="#94a3b8", opacity=0.25, line={"color": "#fb923c"}).encode(
-            x=alt.X("time:T", axis=TAX), y=alt.Y("ci_roll:Q", title="g CO₂ per kWh"),
-            tooltip=[alt.Tooltip("time:T", format="%b %d, %H:00"), alt.Tooltip("ci_roll:Q", format=".0f")])
-        rule = alt.Chart(pd.DataFrame({"y": [250]})).mark_rule(color="#34d399", strokeDash=[5, 4]).encode(y="y:Q")
-        show_chart(style((base + rule).properties(height=250, title="Emissions over time (green line = Level 3 target)")))
-        st.caption(f"Total CO₂ so far: **{S['co2_total']:,.0f} tonnes**.")
-        cost_long = dfa.melt(id_vars=["time"], value_vars=["cost_fuel_k", "cost_imp_k", "cost_om_k", "cost_pen_k"], var_name="k", value_name="kh")
-        nm = dict(cost_fuel_k="Gas fuel + carbon", cost_imp_k="Imported power", cost_om_k="Plant upkeep", cost_pen_k="Blackout penalties")
-        cost_long["Cost"] = cost_long["k"].map(nm)
-        area = alt.Chart(cost_long).mark_area(opacity=0.85).encode(
-            x=alt.X("time:T", axis=TAX), y=alt.Y("kh:Q", stack="zero", title="Thousand $ per hour"),
-            color=alt.Color("Cost:N", scale=alt.Scale(domain=list(nm.values()), range=["#94a3b8", "#fb923c", "#38bdf8", "#ef4444"]), legend=alt.Legend(title=None)))
-        rev = alt.Chart(dfa).mark_line(color="#34d399", strokeWidth=2).encode(x="time:T", y="revenue_k:Q")
-        show_chart(style((area + rev).properties(height=250, title="Cost over time (green line = revenue)")))
-    cap = S["cap"]
-    fleet = pd.DataFrame([
-        dict(Source="🔥 Natural gas", Capacity=f"{cap['gas']:.0f} MW", Now=f"{r['gas']:.0f} MW", Note="Can be turned up and down, but emits CO₂"),
-        dict(Source="💧 Hydro (Bow River)", Capacity=f"{cap['hydro']:.0f} MW", Now=f"{r['hydro']:.0f} MW", Note="Strongest in spring and summer"),
-        dict(Source="🌬️ Wind", Capacity=f"{cap['wind']:.0f} MW", Now=f"{r['wind']:.0f} MW", Note="Follows the wind, not demand"),
-        dict(Source="☀️ Solar", Capacity=f"{cap['solar']:.0f} MW", Now=f"{r['solar']:.0f} MW", Note="Daylight only; weak in winter"),
-        dict(Source="⚛️ Nuclear", Capacity=f"{cap['nuclear']:.0f} MW", Now=f"{r['nuclear']:.0f} MW", Note="Always on (95%), weather-proof"),
-        dict(Source="🔋 Battery", Capacity=f"{cap['battery_mw']:.0f} MW / {cap['battery_mwh']:.0f} MWh", Now=f"{r['battery'] - r['charge']:+.0f} MW", Note="+ discharging, − charging"),
-        dict(Source="🔌 Imports", Capacity=f"{S['import_max']} MW line", Now=f"{r['imports']:.0f} MW", Note="Expensive; fails in a transmission outage"),
-    ])
-    try:
-        st.dataframe(fleet, hide_index=True, width="stretch")
-    except TypeError:
-        st.dataframe(fleet, hide_index=True, use_container_width=True)
-    st.markdown("**🚧 Under construction**")
-    if not S["queue"]:
-        st.caption("Nothing is being built right now.")
-    for item in S["queue"]:
-        spec = BUILDS[item["kind"]]
-        total = max(1, item["eta"] - item["start"])
-        done = clamp((S["t"] - item["start"]) / total, 0, 1)
-        left = max(0, item["eta"] - S["t"])
-        st.progress(done, text=f"{spec['icon']} {spec['label']}: {left // 24}d {left % 24}h to go")
-    g1, g2, g3, g4 = st.columns(4)
-    g1.metric("Days survived", r["day"] + 1)
-    g2.metric("Blackout events", S["blackouts"])
-    g3.metric("Blackout hours", S["blackout_hours"])
-    g4.metric("No-blackout streak", f"{S['streak']} days")
-    with st.expander("📰 Event log"):
-        for n in reversed(S["news"][-40:]):
-            icon = {"bad": "🔴", "good": "🟢"}.get(n["kind"], "🔹")
-            st.markdown(f"{icon} `{n['label']}` — {md_safe(n['text'])}")
-    with st.expander("🧪 How the model works"):
-        st.markdown("""
-- **Demand:** a daily shape (morning ramp, evening peak) × population, plus **heating** below 15 °C (5.5 MW per °C) and **cooling** above 21 °C (8 MW per °C).
-- **Solar:** real sun geometry for 51° N (day length and sun angle by season) × random daily cloudiness × events.
-- **Wind:** a persistent random wind speed (windier in winter) through a turbine power curve (starts at 2.5 m/s, full power near 10 m/s, shuts off at 25 m/s).
-- **Hydro:** run-of-river, seasonal. **Nuclear:** 95% availability. **Gas:** dispatchable, weaker in extreme heat or cold.
-- **Dispatch order:** clean power first, then charge batteries with any surplus (waste the rest), then gas, batteries (per your strategy), imports, and finally blackouts.
-- **Batteries:** 94% efficient each way (88% round trip), limited by both power (MW) and energy (MWh).
-- **Blackouts:** the least critical districts are cut first (industry, homes, downtown, schools). The hospital has backup generators.
-- **Money:** revenue per MWh delivered. Costs for gas fuel, carbon (\\$80 per tonne), imports, upkeep and blackout penalties. Build costs are scaled down for gameplay.
-
-**Simplifications:** Calgary is one region with a simplified fleet. No transmission congestion, reactive power or unit-commitment detail.
-""")
-
-# ---------------------------- auto-play loop ---------------------------------
-if S["running"] and not S["over"]:
-    hrs, delay = SPEEDS.get(st.session_state.get("speed_choice", list(SPEEDS)[1]), (3, 0.55))
-    advance(S, hrs, stop_on_alert=S["autopause"])
-    time.sleep(delay)
-    st.rerun()
+live()   # draw the game (and, while the clock runs, refresh just this area on a timer)
